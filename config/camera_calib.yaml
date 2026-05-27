@@ -1,0 +1,41 @@
+%YAML:1.0
+---
+# Sample stereo calibration for XREAL Air 2 Ultra
+# Replace with real values from OpenCV stereo_calib or Kalibr.
+image_width: 480
+image_height: 640
+
+# Left camera matrix (3x3)
+M1:
+   rows: 3
+   cols: 3
+   data: [ 285.0, 0.0, 240.0, 0.0, 285.0, 320.0, 0.0, 0.0, 1.0 ]
+
+# Left distortion (k1, k2, p1, p2, k3)
+D1:
+   rows: 1
+   cols: 5
+   data: [ -0.05, 0.01, 0.0, 0.0, 0.0 ]
+
+# Right camera matrix (3x3)
+M2:
+   rows: 3
+   cols: 3
+   data: [ 285.0, 0.0, 240.0, 0.0, 285.0, 320.0, 0.0, 0.0, 1.0 ]
+
+# Right distortion (k1, k2, p1, p2, k3)
+D2:
+   rows: 1
+   cols: 5
+   data: [ -0.05, 0.01, 0.0, 0.0, 0.0 ]
+
+# Stereo extrinsics: rotation (3x3) and translation (3x1) left -> right
+R:
+   rows: 3
+   cols: 3
+   data: [ 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0 ]
+
+T:
+   rows: 3
+   cols: 1
+   data: [ -0.065, 0.0, 0.0 ]

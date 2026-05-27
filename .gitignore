@@ -1,0 +1,14 @@
+# Build artifacts
+build/
+
+# Runtime state
+imgui.ini
+imu_debug.log
+imu_debug_ui_settings.json
+
+# Nested repos
+Fast-FoundationStereo/
+
+# Claude local settings
+.claude/
+CLAUDE.md
