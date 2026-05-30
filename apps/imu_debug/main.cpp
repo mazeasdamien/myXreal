@@ -35,9 +35,11 @@
 #include <memory>
 #include <filesystem>
 #include <cstdint>
+#include <shellapi.h>
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
+#pragma comment(lib, "Shell32.lib")
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
@@ -57,35 +59,43 @@ static ID3D11ShaderResourceView* g_srvLeft  = nullptr;
 static ID3D11ShaderResourceView* g_srvRight = nullptr;
 static bool g_camTexOK = false;
 
-// Stereo rectifier + orientation dashboard
+// Stereo rectifier dashboard
 static StereoRectifier g_rectifier;
 static CalibrationData* g_runtime_calib = nullptr;
-static float           g_world_view_yaw_deg = 35.0f;
-static float           g_world_view_pitch_deg = -20.0f;
-static float           g_world_view_scale = 70.0f;
-static float           g_world_cam_distance = 5.0f;
-static bool            g_show_glasses_3dof = true;
-static bool            g_show_vision_cone = true;
-static float           g_vision_cone_fov_deg = 52.0f;
-static float           g_vision_cone_depth_m = 1.6f;
-static std::string     g_track_status;
-static float           g_pose_x_m = 0.0f;
-static float           g_pose_y_m = 0.0f;
-static float           g_pose_z_m = 0.0f;
-static float           g_pose_yaw_deg = 0.0f;
-static float           g_pose_pitch_deg = 0.0f;
-static float           g_pose_roll_deg = 0.0f;
-static int             g_6dof_quality = 0;
-
-static bool            g_feature_overlay_enabled = true;
-static int             g_feature_count = 0;
-static int             g_feature_max_corners = 500;
 static cv::Mat         g_left_overlay_bgr;
 static cv::Mat         g_right_overlay_bgr;
-static uint64_t        g_last_pose_imu_ts_ns = 0;
-static float           g_pose_vx_mps = 0.0f;
-static float           g_pose_vy_mps = 0.0f;
-static float           g_pose_vz_mps = 0.0f;
+
+static std::string     g_scene_test_status;
+static bool            g_run_scene_test_requested = false;
+
+static bool launch_scene_test() {
+    const char* candidates[] = {
+        "../../vr_stereo_scene/Release/vr_stereo_scene.exe",
+        "../../vr_stereo_scene/Debug/vr_stereo_scene.exe",
+        "../vr_stereo_scene/Release/vr_stereo_scene.exe",
+        "../vr_stereo_scene/Debug/vr_stereo_scene.exe",
+        "./vr_stereo_scene.exe",
+    };
+
+    for (const char* rel : candidates) {
+        std::filesystem::path p(rel);
+        if (!std::filesystem::exists(p)) continue;
+
+        std::string exe_path = std::filesystem::weakly_canonical(p).string();
+        const std::string exe_dir = std::filesystem::path(exe_path).parent_path().string();
+        HINSTANCE h = ShellExecuteA(nullptr, "open", exe_path.c_str(), nullptr, exe_dir.c_str(), SW_SHOWNORMAL);
+        if ((INT_PTR)h > 32) {
+            g_scene_test_status = std::string("Funny beaver scene launched: ") + exe_path;
+            return true;
+        }
+
+        g_scene_test_status = std::string("Failed to launch vr_stereo_scene (ShellExecute=") + std::to_string((int)(INT_PTR)h) + "): " + exe_path;
+        return false;
+    }
+
+    g_scene_test_status = "vr_stereo_scene.exe not found. Build local target 'vr_stereo_scene' first.";
+    return false;
+}
 
 static bool            g_flip_display = false;   // horizontal flip on stereo preprocessing path
 static bool            g_clahe_enabled = true;   // CLAHE on stereo preprocessing path
@@ -119,46 +129,21 @@ struct UiPersistSettings {
     bool flip_display = false;
     bool clahe_enabled = true;
     bool rect_enabled = true;
-    bool feature_overlay_enabled = true;
     bool full_state_auto_refresh = true;
     bool full_state_freeze = false;
     bool console_autoscroll = true;
 
-    int feature_max_corners = 500;
-
-    bool show_glasses_3dof = true;
-    bool show_vision_cone = true;
-    float vision_cone_fov_deg = 52.0f;
-    float vision_cone_depth_m = 1.6f;
-    float world_view_yaw_deg = 35.0f;
-    float world_view_pitch_deg = -20.0f;
-    float world_view_scale = 70.0f;
-    float world_cam_distance = 5.0f;
-
     float camera_panel_w = 0.0f;
     float full_panel_w = 0.0f;
 };
-
 static UiPersistSettings read_ui_persist_settings_from_state() {
     UiPersistSettings s;
     s.flip_display = g_flip_display;
     s.clahe_enabled = g_clahe_enabled;
     s.rect_enabled = g_rect_enabled;
-    s.feature_overlay_enabled = g_feature_overlay_enabled;
     s.full_state_auto_refresh = g_full_state_auto_refresh;
     s.full_state_freeze = g_full_state_freeze;
     s.console_autoscroll = g_console_autoscroll;
-
-    s.feature_max_corners = g_feature_max_corners;
-
-    s.show_glasses_3dof = g_show_glasses_3dof;
-    s.show_vision_cone = g_show_vision_cone;
-    s.vision_cone_fov_deg = g_vision_cone_fov_deg;
-    s.vision_cone_depth_m = g_vision_cone_depth_m;
-    s.world_view_yaw_deg = g_world_view_yaw_deg;
-    s.world_view_pitch_deg = g_world_view_pitch_deg;
-    s.world_view_scale = g_world_view_scale;
-    s.world_cam_distance = g_world_cam_distance;
 
     s.camera_panel_w = g_camera_panel_w;
     s.full_panel_w = g_full_panel_w;
@@ -169,21 +154,9 @@ static void apply_ui_persist_settings_to_state(const UiPersistSettings& s) {
     g_flip_display = s.flip_display;
     g_clahe_enabled = s.clahe_enabled;
     g_rect_enabled = s.rect_enabled;
-    g_feature_overlay_enabled = s.feature_overlay_enabled;
     g_full_state_auto_refresh = s.full_state_auto_refresh;
     g_full_state_freeze = s.full_state_freeze;
     g_console_autoscroll = s.console_autoscroll;
-
-    g_feature_max_corners = std::clamp(s.feature_max_corners, 100, 1200);
-
-    g_show_glasses_3dof = s.show_glasses_3dof;
-    g_show_vision_cone = s.show_vision_cone;
-    g_vision_cone_fov_deg = std::clamp(s.vision_cone_fov_deg, 20.0f, 120.0f);
-    g_vision_cone_depth_m = std::clamp(s.vision_cone_depth_m, 0.3f, 6.0f);
-    g_world_view_yaw_deg = std::clamp(s.world_view_yaw_deg, -180.0f, 180.0f);
-    g_world_view_pitch_deg = std::clamp(s.world_view_pitch_deg, -89.0f, 89.0f);
-    g_world_view_scale = std::clamp(s.world_view_scale, 20.0f, 180.0f);
-    g_world_cam_distance = std::clamp(s.world_cam_distance, 0.8f, 20.0f);
 
     g_camera_panel_w = (std::max)(0.0f, s.camera_panel_w);
     g_full_panel_w = (std::max)(0.0f, s.full_panel_w);
@@ -212,21 +185,13 @@ static bool load_ui_persist_settings(const char* path) {
         s.flip_display = j.value("flip_display", s.flip_display);
         s.clahe_enabled = j.value("clahe_enabled", s.clahe_enabled);
         s.rect_enabled = j.value("rect_enabled", s.rect_enabled);
-        s.feature_overlay_enabled = j.value("feature_overlay_enabled", s.feature_overlay_enabled);
         s.full_state_auto_refresh = j.value("full_state_auto_refresh", s.full_state_auto_refresh);
         s.full_state_freeze = j.value("full_state_freeze", s.full_state_freeze);
         s.console_autoscroll = j.value("console_autoscroll", s.console_autoscroll);
 
-        s.feature_max_corners = j.value("feature_max_corners", s.feature_max_corners);
-
-        s.show_glasses_3dof = j.value("show_glasses_3dof", s.show_glasses_3dof);
-        s.show_vision_cone = j.value("show_vision_cone", s.show_vision_cone);
-        s.vision_cone_fov_deg = j.value("vision_cone_fov_deg", s.vision_cone_fov_deg);
-        s.vision_cone_depth_m = j.value("vision_cone_depth_m", s.vision_cone_depth_m);
-        s.world_view_yaw_deg = j.value("world_view_yaw_deg", s.world_view_yaw_deg);
-        s.world_view_pitch_deg = j.value("world_view_pitch_deg", s.world_view_pitch_deg);
-        s.world_view_scale = j.value("world_view_scale", s.world_view_scale);
-        s.world_cam_distance = j.value("world_cam_distance", s.world_cam_distance);
+        if (j.contains("feature_overlay_enabled") && !j.value("feature_overlay_enabled", true)) {
+            g_scene_test_status = "Feature overlay setting removed from dashboard.";
+        }
 
         s.camera_panel_w = (std::max)(0.0f, j.value("camera_panel_w", s.camera_panel_w));
         s.full_panel_w = (std::max)(0.0f, j.value("full_panel_w", s.full_panel_w));
@@ -245,21 +210,9 @@ static bool save_ui_persist_settings(const char* path) {
     j["flip_display"] = s.flip_display;
     j["clahe_enabled"] = s.clahe_enabled;
     j["rect_enabled"] = s.rect_enabled;
-    j["feature_overlay_enabled"] = s.feature_overlay_enabled;
     j["full_state_auto_refresh"] = s.full_state_auto_refresh;
     j["full_state_freeze"] = s.full_state_freeze;
     j["console_autoscroll"] = s.console_autoscroll;
-
-    j["feature_max_corners"] = s.feature_max_corners;
-
-    j["show_glasses_3dof"] = s.show_glasses_3dof;
-    j["show_vision_cone"] = s.show_vision_cone;
-    j["vision_cone_fov_deg"] = s.vision_cone_fov_deg;
-    j["vision_cone_depth_m"] = s.vision_cone_depth_m;
-    j["world_view_yaw_deg"] = s.world_view_yaw_deg;
-    j["world_view_pitch_deg"] = s.world_view_pitch_deg;
-    j["world_view_scale"] = s.world_view_scale;
-    j["world_cam_distance"] = s.world_cam_distance;
 
     j["camera_panel_w"] = s.camera_panel_w;
     j["full_panel_w"] = s.full_panel_w;
@@ -325,17 +278,6 @@ static bool set_button_and_track(const char* label) {
     return clicked;
 }
 
-static int add_feature_overlay(const cv::Mat& gray, cv::Mat& out_bgr) {
-    cv::cvtColor(gray, out_bgr, cv::COLOR_GRAY2BGR);
-    if (!g_feature_overlay_enabled) return 0;
-
-    std::vector<cv::Point2f> corners;
-    cv::goodFeaturesToTrack(gray, corners, g_feature_max_corners, 0.01, 8.0);
-    for (const auto& p : corners)
-        cv::circle(out_bgr, p, 2, cv::Scalar(0, 255, 0), -1, cv::LINE_AA);
-    return (int)corners.size();
-}
-
 static void UploadCameraTextureBgr(ID3D11Texture2D* tex, const cv::Mat& bgr) {
     if (!tex || bgr.empty()) return;
     D3D11_MAPPED_SUBRESOURCE mapped = {};
@@ -353,149 +295,6 @@ static void UploadCameraTextureBgr(ID3D11Texture2D* tex, const cv::Mat& bgr) {
     g_pd3dDeviceContext->Unmap(tex, 0);
 }
 
-static void draw_pose_widget(const char* id, const ImVec2& size) {
-    ImGui::BeginChild(id, size, true);
-    ImVec2 p0 = ImGui::GetCursorScreenPos();
-    ImVec2 avail = ImGui::GetContentRegionAvail();
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-
-    dl->AddRectFilled(p0, ImVec2(p0.x + avail.x, p0.y + avail.y), IM_COL32(16, 18, 24, 255));
-    dl->AddRect(p0, ImVec2(p0.x + avail.x, p0.y + avail.y), IM_COL32(80, 85, 95, 255));
-
-    const ImVec2 c(p0.x + avail.x * 0.5f, p0.y + avail.y * 0.5f);
-    const float yaw = g_pose_yaw_deg * 0.0174532925f;
-    const float pitch = g_pose_pitch_deg * 0.0174532925f;
-    const float roll = g_pose_roll_deg * 0.0174532925f;
-
-    auto proj = [&](float x, float y, float z) {
-        float cr = std::cos(roll), sr = std::sin(roll);
-        float cp = std::cos(pitch), sp = std::sin(pitch);
-        float cy = std::cos(yaw), sy = std::sin(yaw);
-        float xr = cy * (cp * x + sp * (sr * y + cr * z)) - sy * (cr * y - sr * z);
-        float yr = sy * (cp * x + sp * (sr * y + cr * z)) + cy * (cr * y - sr * z);
-        float zr = -sp * x + cp * (sr * y + cr * z);
-        float s = (std::min)(avail.x, avail.y) * 0.26f;
-        return ImVec2(c.x + xr * s, c.y - yr * s - zr * s * 0.25f);
-    };
-
-    ImVec2 o = proj(0, 0, 0);
-    ImVec2 x = proj(1, 0, 0);
-    ImVec2 y = proj(0, 1, 0);
-    ImVec2 z = proj(0, 0, 1);
-
-    dl->AddLine(o, x, IM_COL32(255, 80, 80, 255), 2.0f);
-    dl->AddLine(o, y, IM_COL32(80, 255, 120, 255), 2.0f);
-    dl->AddLine(o, z, IM_COL32(80, 160, 255, 255), 2.0f);
-    dl->AddCircleFilled(o, 3.0f, IM_COL32(230, 230, 230, 255));
-
-    char buf[256];
-    snprintf(buf, sizeof(buf), "6DoF pose | q=%d | xyz=(%.2f, %.2f, %.2f)", g_6dof_quality, g_pose_x_m, g_pose_y_m, g_pose_z_m);
-    dl->AddText(ImVec2(p0.x + 8, p0.y + 8), IM_COL32(210, 230, 255, 255), buf);
-
-    ImGui::Dummy(avail);
-    ImGui::EndChild();
-}
-
-static void draw_glasses_3dof_widget(const char* id, const ImVec2& size) {
-    ImGui::BeginChild(id, size, true);
-    ImVec2 p0 = ImGui::GetCursorScreenPos();
-    ImVec2 avail = ImGui::GetContentRegionAvail();
-    if (avail.x < 10.0f || avail.y < 10.0f) {
-        ImGui::EndChild();
-        return;
-    }
-
-    ImDrawList* dl = ImGui::GetWindowDrawList();
-    dl->AddRectFilled(p0, ImVec2(p0.x + avail.x, p0.y + avail.y), IM_COL32(12, 16, 22, 255));
-    dl->AddRect(p0, ImVec2(p0.x + avail.x, p0.y + avail.y), IM_COL32(80, 85, 95, 255));
-
-    const float yaw_pose = g_pose_yaw_deg * 0.0174532925f;
-    const float pitch_pose = g_pose_pitch_deg * 0.0174532925f;
-    const float roll_pose = g_pose_roll_deg * 0.0174532925f;
-
-    const float cyh = std::cos(yaw_pose), syh = std::sin(yaw_pose);
-    const float cph = std::cos(pitch_pose), sph = std::sin(pitch_pose);
-    const float crh = std::cos(roll_pose), srh = std::sin(roll_pose);
-
-    const float yaw_view = g_world_view_yaw_deg * 0.0174532925f;
-    const float pitch_view = g_world_view_pitch_deg * 0.0174532925f;
-    const float cyv = std::cos(yaw_view), syv = std::sin(yaw_view);
-    const float cpv = std::cos(pitch_view), spv = std::sin(pitch_view);
-
-    auto rotate_head = [&](float x, float y, float z, float& ox, float& oy, float& oz) {
-        ox = cyh * (cph * x + sph * (srh * y + crh * z)) - syh * (crh * y - srh * z);
-        oy = syh * (cph * x + sph * (srh * y + crh * z)) + cyh * (crh * y - srh * z);
-        oz = -sph * x + cph * (srh * y + crh * z);
-    };
-
-    auto project_world = [&](float x, float y, float z, ImVec2& out) -> bool {
-        float xr = cyv * x - syv * z;
-        float zr = syv * x + cyv * z;
-        float yr = cpv * y - spv * zr;
-        float zr2 = spv * y + cpv * zr;
-        float d = zr2 + g_world_cam_distance;
-        if (d <= 0.1f) return false;
-        float s = g_world_view_scale / d;
-        out.x = p0.x + avail.x * 0.5f + xr * s;
-        out.y = p0.y + avail.y * 0.63f - yr * s;
-        return true;
-    };
-
-    auto draw_seg = [&](float ax, float ay, float az, float bx, float by, float bz, ImU32 col, float thick) {
-        float arx, ary, arz, brx, bry, brz;
-        rotate_head(ax, ay, az, arx, ary, arz);
-        rotate_head(bx, by, bz, brx, bry, brz);
-        ImVec2 pa, pb;
-        if (project_world(arx, ary, arz, pa) && project_world(brx, bry, brz, pb)) {
-            dl->AddLine(pa, pb, col, thick);
-        }
-    };
-
-    const float hw = 0.130f;
-    const float hh = 0.030f;
-    const float zf = 0.12f;
-    const float zt = 0.02f;
-
-    draw_seg(-hw,  hh, zf,  hw,  hh, zf, IM_COL32(230, 230, 240, 255), 2.0f);
-    draw_seg(-hw, -hh, zf,  hw, -hh, zf, IM_COL32(230, 230, 240, 255), 2.0f);
-    draw_seg(-hw, -hh, zf, -hw,  hh, zf, IM_COL32(230, 230, 240, 255), 2.0f);
-    draw_seg( hw, -hh, zf,  hw,  hh, zf, IM_COL32(230, 230, 240, 255), 2.0f);
-    draw_seg(-0.015f, 0.0f, zf, 0.015f, 0.0f, zf, IM_COL32(255, 210, 110, 255), 2.4f);
-
-    draw_seg(-hw,  hh, zf, -0.165f, 0.020f, zt, IM_COL32(180, 190, 215, 255), 1.8f);
-    draw_seg( hw,  hh, zf,  0.165f, 0.020f, zt, IM_COL32(180, 190, 215, 255), 1.8f);
-
-    draw_seg(0.0f, 0.0f, 0.0f, 0.18f, 0.0f, 0.0f, IM_COL32(255, 90, 90, 255), 2.0f);
-    draw_seg(0.0f, 0.0f, 0.0f, 0.0f, 0.18f, 0.0f, IM_COL32(90, 255, 130, 255), 2.0f);
-    draw_seg(0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.18f, IM_COL32(90, 170, 255, 255), 2.0f);
-
-    if (g_show_vision_cone) {
-        const float fov = std::clamp(g_vision_cone_fov_deg, 10.0f, 140.0f) * 0.0174532925f;
-        const float cone_z = std::clamp(g_vision_cone_depth_m, 0.2f, 8.0f);
-        const float cone_hw = std::tan(0.5f * fov) * cone_z;
-        const float cone_hh = cone_hw * 0.58f;
-
-        const ImU32 cone_col = IM_COL32(80, 185, 255, 120);
-        draw_seg(0.0f, 0.0f, 0.0f, -cone_hw, -cone_hh, cone_z, cone_col, 1.4f);
-        draw_seg(0.0f, 0.0f, 0.0f,  cone_hw, -cone_hh, cone_z, cone_col, 1.4f);
-        draw_seg(0.0f, 0.0f, 0.0f,  cone_hw,  cone_hh, cone_z, cone_col, 1.4f);
-        draw_seg(0.0f, 0.0f, 0.0f, -cone_hw,  cone_hh, cone_z, cone_col, 1.4f);
-
-        draw_seg(-cone_hw, -cone_hh, cone_z, cone_hw, -cone_hh, cone_z, cone_col, 1.0f);
-        draw_seg( cone_hw, -cone_hh, cone_z, cone_hw,  cone_hh, cone_z, cone_col, 1.0f);
-        draw_seg( cone_hw,  cone_hh, cone_z,-cone_hw,  cone_hh, cone_z, cone_col, 1.0f);
-        draw_seg(-cone_hw,  cone_hh, cone_z,-cone_hw, -cone_hh, cone_z, cone_col, 1.0f);
-    }
-
-    char txt[256];
-    snprintf(txt, sizeof(txt), "3DoF glasses | yaw=%.1f pitch=%.1f roll=%.1f", g_pose_yaw_deg, g_pose_pitch_deg, g_pose_roll_deg);
-    dl->AddText(ImVec2(p0.x + 8, p0.y + 8), IM_COL32(205, 225, 255, 255), txt);
-    dl->AddText(ImVec2(p0.x + 8, p0.y + 26), IM_COL32(160, 185, 210, 255), "Head frame renderer + vision cone");
-
-    ImGui::Dummy(avail);
-    ImGui::EndChild();
-}
-
 static bool g_settings_loaded_once = false;
 
 static const char* raw_na() {
@@ -510,6 +309,7 @@ static const char* camera_model_name(CameraModel model) {
         default: return "Unknown";
     }
 }
+
 
 static std::string build_full_state_snapshot(
     bool imu_ok,
@@ -752,49 +552,18 @@ static void draw_camera_block(bool cam_ok, bool have_cam, bool g_camTexOK_local)
         }
         ImGui::PopID();
 
-        ImGui::TextColored(g_rect_enabled ? ImVec4(0.4f, 1.0f, 0.5f, 1.0f) : ImVec4(1.0f, 0.6f, 0.3f, 1.0f),
-            "%s (%dx%d)", g_rect_enabled ? (g_rectifier.initialized() ? "RECTIFIED" : "RECTIFY (no calib!)") : "RAW", STEREO_EYE_WIDTH, STEREO_EYE_HEIGHT);
-
         ImGui::Spacing();
-        ImGui::TextColored(ImVec4(0.8f, 0.9f, 1.0f, 1.0f), "Stereo preprocessing settings");
-        set_checkbox_and_track("Flip stereo display", &g_flip_display);
+        ImGui::TextColored(ImVec4(0.8f, 0.9f, 1.0f, 1.0f), "Stereo preprocessing settings");        set_checkbox_and_track("Flip stereo display", &g_flip_display);
         ImGui::SameLine();
         set_checkbox_and_track("CLAHE", &g_clahe_enabled);
         ImGui::SameLine();
         set_checkbox_and_track("Rectify", &g_rect_enabled);
 
-        set_checkbox_and_track("Feature overlay", &g_feature_overlay_enabled);
-        set_slider_int_and_track("Feature max corners", &g_feature_max_corners, 100, 1200);
-
-        ImGui::Text("Features: %d", g_feature_count);
-        set_slider_float_and_track("3D view yaw", &g_world_view_yaw_deg, -180.0f, 180.0f, "%.1f");
-        set_slider_float_and_track("3D view pitch", &g_world_view_pitch_deg, -89.0f, 89.0f, "%.1f");
-        set_slider_float_and_track("3D view scale", &g_world_view_scale, 20.0f, 180.0f, "%.1f");
-        set_slider_float_and_track("3D camera distance", &g_world_cam_distance, 0.8f, 20.0f, "%.1f");
-        if (set_button_and_track("Reset 3D view")) {
-            g_world_view_yaw_deg = 35.0f;
-            g_world_view_pitch_deg = -20.0f;
-            g_world_view_scale = 70.0f;
-            g_world_cam_distance = 5.0f;
+        ImGui::SeparatorText("3D scene test");
+        if (set_button_and_track("Run 3D scene test")) {
+            g_run_scene_test_requested = true;
         }
-        if (!g_track_status.empty()) ImGui::TextUnformatted(g_track_status.c_str());
-
-        ImGui::SeparatorText("6DoF");
-        ImGui::Text("pos [m]: x=%.2f y=%.2f z=%.2f", g_pose_x_m, g_pose_y_m, g_pose_z_m);
-        ImGui::Text("rpy [deg]: roll=%.1f pitch=%.1f yaw=%.1f", g_pose_roll_deg, g_pose_pitch_deg, g_pose_yaw_deg);
-        ImGui::Text("quality: %d", g_6dof_quality);
-
-        draw_pose_widget("pose_widget", ImVec2(-1.0f, 130.0f));
-
-        ImGui::SeparatorText("3DoF glasses renderer");
-        set_checkbox_and_track("Show 3DoF glasses", &g_show_glasses_3dof);
-        ImGui::SameLine();
-        set_checkbox_and_track("Show vision cone", &g_show_vision_cone);
-        set_slider_float_and_track("Vision cone FOV", &g_vision_cone_fov_deg, 20.0f, 120.0f, "%.1f deg");
-        set_slider_float_and_track("Vision cone depth", &g_vision_cone_depth_m, 0.3f, 6.0f, "%.2f m");
-        if (g_show_glasses_3dof) {
-            draw_glasses_3dof_widget("glasses_3dof_widget", ImVec2(-1.0f, 170.0f));
-        }
+        if (!g_scene_test_status.empty()) ImGui::TextWrapped("%s", g_scene_test_status.c_str());
 
         ImGui::SeparatorText("Camera calibration");
         if (ui_calib && ui_calib->is_valid) {
@@ -814,13 +583,14 @@ static void draw_camera_block(bool cam_ok, bool have_cam, bool g_camTexOK_local)
 
     } else {
         ImGui::TextColored(ImVec4(1, 0.4f, 0.4f, 1),
-            cam_ok ? "Waiting for camera frames..." : "Camera not available (no XREAL glasses?)");
+            cam_ok ? "Waiting for camera frames (stream started, no stereo pair yet)..." : "Camera not available (no XREAL glasses?)");
+        ImGui::Text("Hint: click Reconnect device if stream stalls.");
     }
 }
 
 static bool CreateCameraTextures() {
     D3D11_TEXTURE2D_DESC desc = {};
-    desc.Width = STEREO_EYE_WIDTH; desc.Height = STEREO_EYE_HEIGHT;
+    desc.Width = 480; desc.Height = 640;
     desc.MipLevels = 1; desc.ArraySize = 1;
     desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     desc.SampleDesc.Count = 1;
@@ -1074,6 +844,11 @@ int main(int argc, char** argv) {
             g_console_last_size = 0;
         }
 
+        if (g_run_scene_test_requested) {
+            g_run_scene_test_requested = false;
+            launch_scene_test();
+        }
+
         while (imu_poll_sample(&sample)) {
             push_history(g_hist_fps, sample.fps);
             g_last_imu_fps = sample.fps;
@@ -1160,40 +935,17 @@ int main(int argc, char** argv) {
                 g_clahe->apply(right_proc, right_proc);
             }
 
-            const int left_features = add_feature_overlay(left_proc, g_left_overlay_bgr);
-            const int right_features = add_feature_overlay(right_proc, g_right_overlay_bgr);
-            g_feature_count = (left_features + right_features) / 2;
+            cv::cvtColor(left_proc, g_left_overlay_bgr, cv::COLOR_GRAY2BGR);
+            cv::cvtColor(right_proc, g_right_overlay_bgr, cv::COLOR_GRAY2BGR);
 
             UploadCameraTextureBgr(g_texLeft, g_left_overlay_bgr);
             UploadCameraTextureBgr(g_texRight, g_right_overlay_bgr);
             g_latest_left_display = left_proc;
             g_latest_right_display = right_proc;
 
-            g_track_status = imu_clock_converged ? "6DoF: tracking" : "6DoF: waiting clock converge";
-
-            if (have_imu_sample) {
-                const float ax = last_imu_sample.accel[0];
-                const float ay = last_imu_sample.accel[1];
-                const float az = last_imu_sample.accel[2];
-                const float g = std::sqrt(ax * ax + ay * ay + az * az) + 1e-6f;
-
-                g_pose_pitch_deg = std::atan2(-ax, std::sqrt(ay * ay + az * az)) * 57.29578f;
-                g_pose_roll_deg = std::atan2(ay, az) * 57.29578f;
-
-                if (g_last_pose_imu_ts_ns > 0 && last_imu_sample.timestamp_ns > g_last_pose_imu_ts_ns) {
-                    const float dt = (float)(last_imu_sample.timestamp_ns - g_last_pose_imu_ts_ns) * 1e-9f;
-                    g_pose_yaw_deg += last_imu_sample.gyro[2] * dt * 57.29578f;
-                    g_pose_vx_mps += (ax / g) * dt;
-                    g_pose_vy_mps += (ay / g) * dt;
-                    g_pose_vz_mps += ((az - 9.80665f) / g) * dt;
-                    g_pose_x_m += g_pose_vx_mps * dt;
-                    g_pose_y_m += g_pose_vy_mps * dt;
-                    g_pose_z_m += g_pose_vz_mps * dt;
-                }
-                g_last_pose_imu_ts_ns = last_imu_sample.timestamp_ns;
+            if (g_scene_test_status.empty()) {
+                g_scene_test_status = "Click 'Run 3D scene test' to launch local vr_stereo_scene.";
             }
-
-            g_6dof_quality = imu_clock_converged ? 100 : 0;
 
         }
 
@@ -1361,7 +1113,8 @@ int main(int argc, char** argv) {
         if (g_console_autoscroll && ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 2.0f) {
             ImGui::SetScrollHereY(1.0f);
         }
-        ImGui::EndChild(); // console_panel
+        ImGui::EndChild();
+
         ImGui::EndChild(); // right_column
 
         ImGui::End();

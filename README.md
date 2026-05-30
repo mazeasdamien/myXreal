@@ -2,12 +2,27 @@
 
 C++17 driver and desktop tooling for XREAL Air 2 Ultra: IMU streaming, stereo camera capture, rectification, and real-time debug visualization.
 
-Current dashboard view with stereo feeds, IMU telemetry, 3DoF glasses renderer, and calibration panel.
+Current dashboard view with stereo feeds, IMU telemetry, and calibration panel.
+
+## Screenshots
+
+### Dashboard
+![Dashboard screenshot](assets/image1.png)
+
+### Stereo 3D
+![Stereo feed](assets/stereo.png)
+
+### XREAL glasses
+![XREAL glasses](assets/glasses.jpeg)
+
 
 ## What is in this repo
 - `imu_driver` shared library for IMU + stereo camera access.
-- `imu_debug` GUI (ImGui + D3D11) with live stereo camera feeds, IMU diagnostics, 6DoF/3DoF views, and calibration display.
+- `imu_debug` GUI (ImGui + D3D11) with live stereo camera feeds, IMU diagnostics, calibration display, and a button to launch the local VR stereo scene.
 - `imu_dump` CLI IMU stream viewer.
+- `vr_scene_driver` static library (`src/vr_scene_driver`) used by the VR scene app.
+- `vr_stereo_scene` standalone local SBS 3D scene app (funny beaver model) for XREAL glasses.
+- `assets/funny_beaver.bin` local mesh asset copied next to `vr_stereo_scene.exe` at build time.
 
 ## Prerequisites (Windows)
 - Visual Studio 2022 (x64 toolchain)
@@ -19,6 +34,11 @@ Current dashboard view with stereo feeds, IMU telemetry, 3DoF glasses renderer, 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release
+
+# Optional explicit targets
+cmake --build build --config Release --target imu_debug
+cmake --build build --config Release --target imu_dump
+cmake --build build --config Release --target vr_stereo_scene
 ```
 
 Debug build:
@@ -33,7 +53,10 @@ From build outputs (DLLs/calibration are copied automatically by CMake post-buil
 ```bash
 build/apps/imu_debug/Release/imu_debug.exe
 build/apps/imu_dump/Release/imu_dump.exe
+build/apps/vr_stereo_scene/Release/vr_stereo_scene.exe
 ```
+
+From `imu_debug`, use **Run 3D scene test** to launch the local `vr_stereo_scene.exe` (no external repository dependency).
 
 ## Quick guidance
 - Start with `imu_debug` for full device diagnostics.

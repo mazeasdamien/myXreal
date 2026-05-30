@@ -485,11 +485,69 @@ CalibrationData* calibration_load_json(const char* path) {
         return true;
     };
 
+    auto parseDisplay = [](const json& disp, const char* p_key, const char* q_key, DisplayExtrinsics& de, const char* label) {
+        if (!disp.contains(p_key) || !disp.contains(q_key)) {
+            fprintf(stderr, "[Calib-JSON] %s missing %s or %s\n", label, p_key, q_key);
+            de.valid = false;
+            return;
+        }
+
+        const auto& p = disp[p_key];
+        const auto& q = disp[q_key];
+        if (!p.is_array() || p.size() < 3 || !q.is_array() || q.size() < 4) {
+            fprintf(stderr, "[Calib-JSON] %s invalid pose array sizes\n", label);
+            de.valid = false;
+            return;
+        }
+
+        de.t_imu_display(0) = p[0].get<double>();
+        de.t_imu_display(1) = p[1].get<double>();
+        de.t_imu_display(2) = p[2].get<double>();
+
+        // display.target_q_*_display is Hamilton (qx,qy,qz,qw)
+        double x = q[0].get<double>();
+        double y = q[1].get<double>();
+        double z = q[2].get<double>();
+        double w = q[3].get<double>();
+        double nrm = std::sqrt(x*x + y*y + z*z + w*w);
+        if (nrm <= 1e-9) {
+            fprintf(stderr, "[Calib-JSON] %s invalid quaternion norm\n", label);
+            de.valid = false;
+            return;
+        }
+        x /= nrm; y /= nrm; z /= nrm; w /= nrm;
+
+        de.R_imu_display(0, 0) = 1.0 - 2.0*(y*y + z*z);
+        de.R_imu_display(0, 1) = 2.0*(x*y - z*w);
+        de.R_imu_display(0, 2) = 2.0*(x*z + y*w);
+        de.R_imu_display(1, 0) = 2.0*(x*y + z*w);
+        de.R_imu_display(1, 1) = 1.0 - 2.0*(x*x + z*z);
+        de.R_imu_display(1, 2) = 2.0*(y*z - x*w);
+        de.R_imu_display(2, 0) = 2.0*(x*z - y*w);
+        de.R_imu_display(2, 1) = 2.0*(y*z + x*w);
+        de.R_imu_display(2, 2) = 1.0 - 2.0*(x*x + y*y);
+
+        de.valid = true;
+        fprintf(stdout, "[Calib-JSON] %s display extrinsics parsed\n", label);
+    };
+
     auto* calib = new CalibrationData();
 
     auto& slam = data["SLAM_camera"];
     if (!parseCam(slam.at("device_1"), calib->left,  calib->T_left_imu,  "device_1")) { delete calib; return nullptr; }
     if (!parseCam(slam.at("device_2"), calib->right, calib->T_right_imu, "device_2")) { delete calib; return nullptr; }
+
+    if (data.contains("display") && data["display"].is_object()) {
+        const auto& disp = data["display"];
+        parseDisplay(disp, "target_p_left_display", "target_q_left_display", calib->T_left_display_imu, "left");
+        parseDisplay(disp, "target_p_right_display", "target_q_right_display", calib->T_right_display_imu, "right");
+    } else {
+        fprintf(stderr, "[Calib-JSON] No display section; composite overlay display extrinsics unavailable\n");
+    }
+
+    if (!calib->T_left_display_imu.valid || !calib->T_right_display_imu.valid) {
+        fprintf(stderr, "[Calib-JSON] Display extrinsics incomplete; composite overlay will fallback\n");
+    }
 
     // Compute T_left_right = T_right_imu * inv(T_left_imu)
     //   p_imu = inv(T_left_imu) * p_left_cam

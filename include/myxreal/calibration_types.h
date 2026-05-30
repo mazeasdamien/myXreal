@@ -44,6 +44,12 @@ struct CameraExtrinsics {
     Eigen::Vector3d t = Eigen::Vector3d::Zero(); // metres
 };
 
+struct DisplayExtrinsics {
+    Eigen::Matrix3d R_imu_display = Eigen::Matrix3d::Identity(); // p_imu = R * p_display + t
+    Eigen::Vector3d t_imu_display = Eigen::Vector3d::Zero();      // metres
+    bool valid = false;
+};
+
 // ---------------------------------------------------------------------------
 // IMU noise / misalignment parameters (standard VIO model)
 // ---------------------------------------------------------------------------
@@ -89,6 +95,8 @@ struct CalibrationData {
     CameraIntrinsics right;
     CameraExtrinsics T_left_imu;
     CameraExtrinsics T_right_imu;
+    DisplayExtrinsics T_left_display_imu;   // display frame -> IMU frame
+    DisplayExtrinsics T_right_display_imu;  // display frame -> IMU frame
     Eigen::Matrix4d  T_left_right   = Eigen::Matrix4d::Identity();
     double           baseline_m     = 0.0;
     ImuIntrinsics    imu;

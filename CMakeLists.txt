@@ -75,3 +75,4 @@ target_link_libraries(calibration PUBLIC
 add_subdirectory(src/driver)
 add_subdirectory(apps/imu_debug)
 add_subdirectory(apps/imu_dump)
+add_subdirectory(apps/vr_stereo_scene)
