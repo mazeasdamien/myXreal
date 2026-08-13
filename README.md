@@ -2,7 +2,13 @@
 
 C++17 driver and desktop tooling for XREAL Air 2 Ultra: IMU streaming, stereo camera capture, rectification, and real-time debug visualization.
 
-Current dashboard view with stereo feeds, IMU telemetry, and calibration panel.
+## Demo
+
+`imu_debug` running against a connected pair of glasses — stereo feeds, IMU telemetry and the calibration panel, live.
+
+[![imu_debug running live](https://video.agentxr.app/xreal-imu-stereo-camera-debug-dashboard-windows-pc-air-2/demo.gif)](https://video.agentxr.app/xreal-imu-stereo-camera-debug-dashboard-windows-pc-air-2/full.mp4)
+
+*Click for the full clip with sound (50s).*
 
 ## Screenshots
 
